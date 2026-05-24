@@ -12,5 +12,5 @@ from . import cv
 from . import audio
 try:
     from . import llm
-except Exception:
-    llm = None
+except ImportError:
+    pass
