@@ -769,6 +769,13 @@ void Llm::generate_init(std::ostream* os, const char* end_with) {
     if (!mContext->generate_str.empty()) {
         mContext->generate_str.clear();
     }
+    if (!mContext->stream_prefix_buffer.empty()) {
+        mContext->stream_prefix_buffer.clear();
+    }
+    if (!mContext->stream_tag_buffer.empty()) {
+        mContext->stream_tag_buffer.clear();
+    }
+    mContext->stream_prefix_pending = true;
     mContext->gen_seq_len = 0;
     mContext->prefill_us  = 0;
     mContext->decode_us   = 0;
@@ -783,6 +790,93 @@ void Llm::generate_init(std::ostream* os, const char* end_with) {
     if(mContext->status != LlmStatus::NOT_LOADED) {
         mContext->status = LlmStatus::RUNNING;
     }
+}
+
+bool Llm::outputThinkingDisabled() const {
+    if (!mConfig->config_.contains("jinja")) {
+        return false;
+    }
+    auto jinja = mConfig->config_["jinja"];
+    if (!jinja.contains("context") || !jinja["context"].is_object()) {
+        return false;
+    }
+    auto context = jinja["context"];
+    return context.contains("enable_thinking") && context["enable_thinking"].is_boolean() &&
+           !context["enable_thinking"].get<bool>();
+}
+
+std::string Llm::sanitizeOutputPiece(const std::string& piece) {
+    // NOTE: This function assumes single-threaded execution during token generation.
+    // All speculative decoding strategies (lookahead, eagle, mtp, dflash) emit tokens
+    // sequentially from the main generation loop. If future changes introduce
+    // multi-threaded token emission, add mutex protection for the buffer fields.
+    if (outputThinkingDisabled()) {
+        mContext->stream_tag_buffer += piece;
+        size_t hold = MNN::Transformer::trailingThinkCloserPrefixLength(mContext->stream_tag_buffer);
+        size_t emitLen = mContext->stream_tag_buffer.size() - hold;
+        std::string emit = mContext->stream_tag_buffer.substr(0, emitLen);
+        mContext->stream_tag_buffer.erase(0, emitLen);
+        MNN::Transformer::stripThinkCloserTokens(emit);
+        if (mContext->stream_prefix_pending) {
+            mContext->stream_prefix_buffer += emit;
+            if (MNN::Transformer::mayContinueLeadingEmptyThinkBlock(mContext->stream_prefix_buffer)) {
+                return "";
+            }
+            std::string sanitized = mContext->stream_prefix_buffer;
+            MNN::Transformer::stripLeadingEmptyThinkBlocks(sanitized);
+            MNN::Transformer::stripLeadingThinkClosers(sanitized);
+            if (sanitized != mContext->stream_prefix_buffer) {
+                mContext->stream_prefix_buffer.clear();
+                if (sanitized.empty()) {
+                    return "";
+                }
+                mContext->stream_prefix_pending = false;
+                return sanitized;
+            }
+            mContext->stream_prefix_pending = false;
+            std::string raw = mContext->stream_prefix_buffer;
+            mContext->stream_prefix_buffer.clear();
+            return raw;
+        }
+        return emit;
+    }
+    if (!mContext->stream_prefix_pending) {
+        return piece;
+    }
+    mContext->stream_prefix_buffer += piece;
+    if (MNN::Transformer::mayContinueLeadingEmptyThinkBlock(mContext->stream_prefix_buffer)) {
+        return "";
+    }
+    std::string sanitized = mContext->stream_prefix_buffer;
+    MNN::Transformer::stripLeadingEmptyThinkBlocks(sanitized);
+    MNN::Transformer::stripLeadingThinkClosers(sanitized);
+    if (sanitized != mContext->stream_prefix_buffer) {
+        mContext->stream_prefix_buffer.clear();
+        if (sanitized.empty()) {
+            return "";
+        }
+        mContext->stream_prefix_pending = false;
+        return sanitized;
+    }
+    mContext->stream_prefix_pending = false;
+    std::string raw = mContext->stream_prefix_buffer;
+    mContext->stream_prefix_buffer.clear();
+    return raw;
+}
+
+void Llm::emitDecodedString(const std::string& piece) {
+    auto sanitized = sanitizeOutputPiece(piece);
+    if (sanitized.empty()) {
+        return;
+    }
+    mContext->generate_str += sanitized;
+    if (nullptr != mContext->os) {
+        *mContext->os << sanitized << std::flush;
+    }
+}
+
+void Llm::emitDecodedToken(int token) {
+    emitDecodedString(tokenizer_decode(token));
 }
 
 size_t Llm::getCurrentHistory() const {
@@ -1155,6 +1249,7 @@ void Llm::updateCachedPromptText(const ChatMessages& chat_prompts, size_t histor
             continue;
         response_text += tokenizer_decode(tok);
     }
+    MNN::Transformer::stripLeadingThinkClosers(response_text);
     if (!response_text.empty()) {
         msgs_with_response.emplace_back("assistant", response_text);
     }
