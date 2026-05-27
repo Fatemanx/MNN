@@ -278,9 +278,7 @@ void DFlashGeneration::generate(GenerationParams& param) {
         }
 
         // Output first token
-        if (nullptr != mContext->os) {
-            *mContext->os << mLlm->tokenizer_decode(mContext->current_token) << std::flush;
-        }
+        mLlm->emitDecodedToken(mContext->current_token);
 
         // Compute mContextHidden from prefill hidden_states
         // Use full prefill hidden_states for better draft quality (matches reference implementation)
@@ -515,9 +513,7 @@ void DFlashGeneration::generate(GenerationParams& param) {
             int token = block_ids[i];
             mContext->history_tokens.push_back(token);
             mContext->output_tokens.push_back(token);
-            if (nullptr != mContext->os) {
-                *mContext->os << mLlm->tokenizer_decode(token) << std::flush;
-            }
+            mLlm->emitDecodedToken(token);
             if (mLlm->is_stop(token)) {
                 stop = true;
                 break;
@@ -528,13 +524,13 @@ void DFlashGeneration::generate(GenerationParams& param) {
             // Add the corrected/next token
             mContext->history_tokens.push_back(mContext->current_token);
             mContext->output_tokens.push_back(mContext->current_token);
-            if (nullptr != mContext->os) {
-                if (mLlm->is_stop(mContext->current_token)) {
+            if (mLlm->is_stop(mContext->current_token)) {
+                if (nullptr != mContext->os) {
                     *mContext->os << mContext->end_with << std::flush;
-                    stop = true;
-                } else {
-                    *mContext->os << mLlm->tokenizer_decode(mContext->current_token) << std::flush;
                 }
+                stop = true;
+            } else {
+                mLlm->emitDecodedToken(mContext->current_token);
             }
         }
 
