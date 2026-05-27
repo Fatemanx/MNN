@@ -68,19 +68,12 @@ void ArGeneration::generate(GenerationParams& param) {
         mContext->output_tokens.push_back(mContext->current_token);
         mLlm->updateContext(0, 1);
         if (mLlm->is_stop(mContext->current_token)) {
-            if (nullptr != mContext->os) {
-                *mContext->os << mContext->end_with << std::flush;
-            }
+            mLlm->emitEndWith();
             break;
         }
         // Decode and Output
         MNN::Timer _t;
-        auto decodeStr = mLlm->tokenizer_decode(mContext->current_token);
-        mContext->generate_str += decodeStr;
-        if (nullptr != mContext->os) {
-            *mContext->os << decodeStr;
-            *mContext->os << std::flush;
-        }
+        mLlm->emitDecodedToken(mContext->current_token);
         // Compute Next Logits
 #ifdef DUMP_PROFILE_INFO
         MNN::Timer _t_fwd;
@@ -129,9 +122,7 @@ int Generation::draftVerify(VARP logits, const std::vector<int> &drafts, bool& s
             // stop token just break the process
             if (mLlm->is_stop(predict)) {
                 mContext->current_token = predict;
-                if (nullptr != mContext->os) {
-                    *mContext->os << mContext->end_with << std::flush;
-                }
+                mLlm->emitEndWith();
                 stop = true;
                 break;
             }
@@ -141,10 +132,7 @@ int Generation::draftVerify(VARP logits, const std::vector<int> &drafts, bool& s
                 break;
             }
 
-            if (nullptr != mContext->os) {
-                *mContext->os << mLlm->tokenizer_decode(predict);
-                *mContext->os << std::flush;
-            }
+            mLlm->emitDecodedToken(predict);
         }
         // all drafts are corrcet!
         if(i_dft == drafts.size()) {

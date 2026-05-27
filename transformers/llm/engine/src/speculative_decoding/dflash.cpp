@@ -271,9 +271,7 @@ void DFlashGeneration::generate(GenerationParams& param) {
         mLlm->updateContext(0, 1);
 
         if (mLlm->is_stop(mContext->current_token)) {
-            if (nullptr != mContext->os) {
-                *mContext->os << mContext->end_with << std::flush;
-            }
+            mLlm->emitEndWith();
             return;
         }
 
@@ -514,9 +512,7 @@ void DFlashGeneration::generate(GenerationParams& param) {
             mContext->history_tokens.push_back(token);
             mContext->output_tokens.push_back(token);
             if (mLlm->is_stop(token)) {
-                if (nullptr != mContext->os) {
-                    *mContext->os << mContext->end_with << std::flush;
-                }
+                mLlm->emitEndWith();
                 stop = true;
                 break;
             }
@@ -528,9 +524,7 @@ void DFlashGeneration::generate(GenerationParams& param) {
             mContext->history_tokens.push_back(mContext->current_token);
             mContext->output_tokens.push_back(mContext->current_token);
             if (mLlm->is_stop(mContext->current_token)) {
-                if (nullptr != mContext->os) {
-                    *mContext->os << mContext->end_with << std::flush;
-                }
+                mLlm->emitEndWith();
                 stop = true;
             } else {
                 mLlm->emitDecodedToken(mContext->current_token);

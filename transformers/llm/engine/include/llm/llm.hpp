@@ -123,6 +123,10 @@ struct LlmContext {
     std::vector<int> history_tokens;
     std::vector<int> output_tokens;
     std::string generate_str;
+    std::string stream_prefix_buffer;
+    std::string stream_tag_buffer;
+    size_t stream_prefix_output_chars = 0;
+    bool stream_prefix_pending = false;
     // llm status
     LlmStatus status = LlmStatus::NOT_LOADED;
 };
@@ -196,6 +200,9 @@ protected:
     void setChatTemplate();
     void initRuntime();
     void setRuntimeHint(std::shared_ptr<Express::Executor::RuntimeManager> &rtg, bool mllm = false);
+    void emitDecodedString(const std::string& piece);
+    void emitDecodedToken(int token);
+    void emitEndWith();
     std::shared_ptr<LlmContext> mContext;
     std::shared_ptr<KVMeta> mMeta;
     std::shared_ptr<LlmConfig> mConfig;
@@ -221,6 +228,7 @@ protected:
     int mSeqLenIndex = 0;
     std::shared_ptr<MNN::Express::Executor> mExecutor;
 protected:
+    friend class Generation;
     friend class ArGeneration;
     friend class LookaheadGeneration;
     friend class MtpGeneration;
@@ -233,6 +241,9 @@ private:
     std::shared_ptr<Generation> mGenerationStrategy;
     void setSpeculativeConfig();
     void updateContext(int seq_len, int gen_len);
+    bool outputThinkingDisabled() const;
+    void flushOutputBuffers();
+    std::string sanitizeOutputPiece(const std::string& piece);
 private:
     bool mInSpec = false;
     int mDraftLength = 4;

@@ -98,13 +98,8 @@ void LookaheadGeneration::generate(GenerationParams& param) {
         MNN::Timer _t;
         std::vector<int> drafts;
         drafts.push_back(mContext->current_token);
-        
         auto decodeStr = mLlm->tokenizer_decode(mContext->current_token);
-        mContext->generate_str += decodeStr;
-        if (nullptr != mContext->os) {
-            *mContext->os << decodeStr;
-            *mContext->os << std::flush;
-        }
+        mLlm->emitDecodedString(decodeStr);
         // mContext->current_token add to gen_seq_len
         mLlm->updateContext(0, 1);
 
@@ -191,9 +186,7 @@ void LookaheadGeneration::generate(GenerationParams& param) {
                 mContext->history_tokens.push_back(mContext->current_token);
                 mContext->output_tokens.push_back(mContext->current_token);
                 mLlm->updateContext(0, 1);
-                if (nullptr != mContext->os) {
-                    *mContext->os << mContext->end_with << std::flush;
-                }
+                mLlm->emitEndWith();
                 break;
             }
         }

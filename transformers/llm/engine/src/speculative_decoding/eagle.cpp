@@ -311,12 +311,10 @@ bool EagleGeneration::processTokens(const std::vector<int>& acceptTokens) {
     for (int i = 0; i < acceptTokens.size(); i++) {
         auto token = acceptTokens[i];
         if (mLlm->is_stop(token)) {
+            mLlm->emitEndWith();
             return true;
         }
-        if (nullptr != mContext->os) {
-            auto tokenStr = mLlm->tokenizer_decode(token);
-            *mContext->os << tokenStr << std::flush;
-        }
+        mLlm->emitDecodedToken(token);
     }
     return false;
 }
@@ -333,9 +331,7 @@ void EagleGeneration::generate(GenerationParams& param) {
     mContext->history_tokens.push_back(mContext->current_token);
     mContext->output_tokens.push_back(mContext->current_token);
     mLlm->updateContext(0, 1);
-    if (nullptr != mContext->os) {
-        *mContext->os << mLlm->tokenizer_decode(sampleToken) << std::flush;
-    }
+    mLlm->emitDecodedToken(sampleToken);
     inputIds.push_back(sampleToken);
     VARP hiddenStates = param.outputs[1];
     // push sampleToken to inputEmbeds

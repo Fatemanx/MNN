@@ -22,6 +22,28 @@ from utils.smooth_quantizer import SmoothQuantizer
 from utils.omni_quantizer import OmniQuantizer
 from utils.torch_utils import onnx_export
 
+def has_minicpm5_reasoning_context(tokenizer, chat_template):
+    if chat_template is None:
+        return False
+    normalized_template = chat_template.replace('\r\n', '\n').replace('\r', '\n')
+    registered_tokens = set(getattr(tokenizer, 'additional_special_tokens', []) or [])
+    if hasattr(tokenizer, 'get_added_vocab'):
+        try:
+            registered_tokens.update(tokenizer.get_added_vocab().keys())
+        except Exception:
+            pass
+    registered_tokens.update(getattr(tokenizer, 'all_special_tokens', []) or [])
+    has_minicpm5_thought_tokens = {
+        '<|thought_begin|>',
+        '<|thought_end|>',
+    }.issubset(registered_tokens)
+    has_minicpm5_reasoning_template = (
+        'enable_thinking' in normalized_template and
+        '<think>\n\n</think>\n\n' in normalized_template and
+        "content.split('</think>')" in normalized_template
+    )
+    return has_minicpm5_thought_tokens and has_minicpm5_reasoning_template
+
 class LlmExporter(torch.nn.Module):
     '''
     Base class for all llm model export. Inherits from [`torch.nn.Module`].
@@ -104,6 +126,15 @@ class LlmExporter(torch.nn.Module):
                      self.llm_config['jinja']['bos'] = self.tokenizer.bos_token
                  if self.tokenizer.eos_token:
                      self.llm_config['jinja']['eos'] = self.tokenizer.eos_token
+                 # MiniCPM5 keeps dedicated thought-boundary tokens in the tokenizer
+                 # vocabulary even when the exported template normalizes to <think>.
+                 # Preserve MiniCPM5's default thinking behavior based on the
+                 # tokenizer/template content only, so exported models do not
+                 # depend on their local directory names.
+                 if has_minicpm5_reasoning_context(self.tokenizer, chat_template):
+                     self.llm_config['jinja']['context'] = {
+                         'enable_thinking': True
+                     }
         # gemma4's HF template is too complex for minja parser, use simplified version
         if self.model_type == 'gemma4':
             self.llm_config['jinja'] = {

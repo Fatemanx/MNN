@@ -1,7 +1,11 @@
 import time
 import functools
 import traceback
-from yaspin import yaspin
+
+try:
+    from yaspin import yaspin
+except ImportError:
+    yaspin = None
 
 RESET = "\033[0m"
 GREEN = "\033[32;1m"
@@ -11,6 +15,17 @@ def spinner_run(text='Processing...', hide=False):
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
+            if yaspin is None:
+                start = time.time()
+                try:
+                    result = func(*args, **kwargs)
+                except Exception:
+                    traceback.print_exc()
+                    exit(1)
+                end = time.time()
+                during = f'[{end-start:05.2f} s]'.replace('[0', '[ ')
+                print(f'{text}{YELLOW}{result}{RESET} {GREEN}{during}{RESET}')
+                return result
             with yaspin(text=text, color="cyan") as spinner:
                 start = time.time()
                 try:

@@ -57,6 +57,26 @@ static inline VARP _var(std::vector<T> vec, const std::vector<int> &dims) {
     return _Const(vec.data(), dims, NHWC, halide_type_of<T>());
 }
 
+// Keep the no-thinking cleanup scoped to the reply prefix: 96 chars covers the
+// longest closing marker (<|thought_end|>, 15 chars) with ample headroom for
+// fragmented emission, an empty think block, and the first visible answer bytes.
+static const size_t kDisableThinkingPrefixWindowChars = 96;
+
+static size_t trailingThinkCloserPrefixLength(const std::string& text) {
+    static const char* kClosingTags[] = {"</think>", "<|thought_end|>"};
+    size_t maxPrefix = 0;
+    for (const auto* tag : kClosingTags) {
+        std::string closingTag(tag);
+        size_t upper = std::min(text.size(), closingTag.size() - 1);
+        for (size_t len = 1; len <= upper; len++) {
+            if (text.compare(text.size() - len, len, closingTag, 0, len) == 0) {
+                maxPrefix = std::max(maxPrefix, len);
+            }
+        }
+    }
+    return maxPrefix;
+}
+
 Llm* Llm::createLLM(const std::string& config_path) {
     std::shared_ptr<LlmConfig> config(new LlmConfig(config_path));
     Llm* llm = nullptr;
@@ -758,6 +778,10 @@ void Llm::reset() {
     mContext->audio_input_s = 0.0f;
     mMeta->remove = mMeta->previous;
     mCachedPromptText.clear();
+    mContext->stream_prefix_buffer.clear();
+    mContext->stream_tag_buffer.clear();
+    mContext->stream_prefix_output_chars = 0;
+    mContext->stream_prefix_pending = false;
 }
 
 void Llm::generate_init(std::ostream* os, const char* end_with) {
@@ -775,6 +799,7 @@ void Llm::generate_init(std::ostream* os, const char* end_with) {
     if (!mContext->stream_tag_buffer.empty()) {
         mContext->stream_tag_buffer.clear();
     }
+    mContext->stream_prefix_output_chars = 0;
     mContext->stream_prefix_pending = true;
     mContext->gen_seq_len = 0;
     mContext->prefill_us  = 0;
@@ -805,6 +830,35 @@ bool Llm::outputThinkingDisabled() const {
            !context["enable_thinking"].get<bool>();
 }
 
+void Llm::flushOutputBuffers() {
+    std::string pending;
+    if (outputThinkingDisabled()) {
+        if (mContext->stream_prefix_pending) {
+            pending = mContext->stream_prefix_buffer + mContext->stream_tag_buffer;
+            MNN::Transformer::stripLeadingEmptyThinkBlocks(pending);
+            MNN::Transformer::stripLeadingThinkClosers(pending);
+        } else {
+            pending = mContext->stream_tag_buffer;
+        }
+    } else if (mContext->stream_prefix_pending) {
+        pending = mContext->stream_prefix_buffer;
+        MNN::Transformer::stripLeadingEmptyThinkBlocks(pending);
+        MNN::Transformer::stripLeadingThinkClosers(pending);
+    } else {
+        pending = mContext->stream_tag_buffer;
+    }
+    mContext->stream_prefix_buffer.clear();
+    mContext->stream_tag_buffer.clear();
+    mContext->stream_prefix_pending = false;
+    mContext->stream_prefix_output_chars = 0;
+    if (!pending.empty()) {
+        mContext->generate_str += pending;
+        if (nullptr != mContext->os) {
+            *mContext->os << pending << std::flush;
+        }
+    }
+}
+
 std::string Llm::sanitizeOutputPiece(const std::string& piece) {
     // NOTE: This function assumes single-threaded execution during token generation.
     // All speculative decoding strategies (lookahead, eagle, mtp, dflash) emit tokens
@@ -812,11 +866,10 @@ std::string Llm::sanitizeOutputPiece(const std::string& piece) {
     // multi-threaded token emission, add mutex protection for the buffer fields.
     if (outputThinkingDisabled()) {
         mContext->stream_tag_buffer += piece;
-        size_t hold = MNN::Transformer::trailingThinkCloserPrefixLength(mContext->stream_tag_buffer);
+        size_t hold = trailingThinkCloserPrefixLength(mContext->stream_tag_buffer);
         size_t emitLen = mContext->stream_tag_buffer.size() - hold;
         std::string emit = mContext->stream_tag_buffer.substr(0, emitLen);
         mContext->stream_tag_buffer.erase(0, emitLen);
-        MNN::Transformer::stripThinkCloserTokens(emit);
         if (mContext->stream_prefix_pending) {
             mContext->stream_prefix_buffer += emit;
             if (MNN::Transformer::mayContinueLeadingEmptyThinkBlock(mContext->stream_prefix_buffer)) {
@@ -830,13 +883,27 @@ std::string Llm::sanitizeOutputPiece(const std::string& piece) {
                 if (sanitized.empty()) {
                     return "";
                 }
-                mContext->stream_prefix_pending = false;
+                mContext->stream_prefix_output_chars += sanitized.size();
+                if (mContext->stream_prefix_output_chars >= kDisableThinkingPrefixWindowChars) {
+                    mContext->stream_prefix_pending = false;
+                    sanitized += mContext->stream_tag_buffer;
+                    mContext->stream_tag_buffer.clear();
+                }
                 return sanitized;
             }
-            mContext->stream_prefix_pending = false;
             std::string raw = mContext->stream_prefix_buffer;
             mContext->stream_prefix_buffer.clear();
+            mContext->stream_prefix_output_chars += raw.size();
+            if (mContext->stream_prefix_output_chars >= kDisableThinkingPrefixWindowChars) {
+                mContext->stream_prefix_pending = false;
+                raw += mContext->stream_tag_buffer;
+                mContext->stream_tag_buffer.clear();
+            }
             return raw;
+        }
+        if (!mContext->stream_tag_buffer.empty()) {
+            emit += mContext->stream_tag_buffer;
+            mContext->stream_tag_buffer.clear();
         }
         return emit;
     }
@@ -877,6 +944,13 @@ void Llm::emitDecodedString(const std::string& piece) {
 
 void Llm::emitDecodedToken(int token) {
     emitDecodedString(tokenizer_decode(token));
+}
+
+void Llm::emitEndWith() {
+    flushOutputBuffers();
+    if (nullptr != mContext->os) {
+        *mContext->os << mContext->end_with << std::flush;
+    }
 }
 
 size_t Llm::getCurrentHistory() const {
@@ -922,6 +996,7 @@ void Llm::generate(int max_token) {
     }
     mGenerateParam->max_new_tokens = max_token;
     mGenerationStrategy->generate(*mGenerateParam);
+    flushOutputBuffers();
 }
 
 std::vector<int> Llm::generate(const std::vector<int>& input_ids, int max_tokens) {
@@ -1088,6 +1163,7 @@ std::vector<int> Llm::generate(MNN::Express::VARP input_embeds, int max_tokens) 
     if (0 < max_tokens) {
         mGenerateParam->max_new_tokens = max_tokens;
         mGenerationStrategy->generate(*mGenerateParam);
+        flushOutputBuffers();
     }
     return mContext->output_tokens;
 }
@@ -1098,6 +1174,7 @@ void Llm::response(const std::vector<int>& input_ids, std::ostream* os, const ch
     generate_init(os, end_with);
     CHECK_LLM_RUNNING(mContext);
     generate(input_ids, max_new_tokens);
+    flushOutputBuffers();
 }
 
 void Llm::response(MNN::Express::VARP input_embeds, std::ostream* os, const char* end_with, int max_new_tokens) {
@@ -1106,6 +1183,7 @@ void Llm::response(MNN::Express::VARP input_embeds, std::ostream* os, const char
     generate_init(os, end_with);
     CHECK_LLM_RUNNING(mContext);
     generate(input_embeds, max_new_tokens);
+    flushOutputBuffers();
 }
 
 void Llm::response(const std::string& user_content, std::ostream* os, const char* end_with, int max_new_tokens) {
@@ -1203,6 +1281,7 @@ void Llm::response(const ChatMessages& chat_prompts, std::ostream* os, const cha
         // updateCachedPromptText only sees the assistant response tokens.
         size_t history_before = mContext->history_tokens.size() + delta.size();
         generate(delta, max_new_tokens);
+        flushOutputBuffers();
 
         // Update cache after generation so non-Android callers (llm_demo,
         // mls) don't need to call syncPromptCache() externally.

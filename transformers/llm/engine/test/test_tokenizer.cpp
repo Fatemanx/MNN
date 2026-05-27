@@ -138,6 +138,11 @@ static TestResult test_model(const std::string& models_path, const std::string& 
                     }
                 }
             }
+            if (j.contains("extras")) {
+                tok->set_chat_template_context(j["extras"].dump());
+            } else {
+                tok->set_chat_template_context("");
+            }
             result.total++;
 
             std::string actual_text = tok->apply_chat_template(messages, add_gen);

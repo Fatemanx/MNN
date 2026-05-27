@@ -74,32 +74,6 @@ inline void stripLeadingThinkClosers(std::string& text) {
     }
 }
 
-inline void stripThinkCloserTokens(std::string& text) {
-    static const char* kClosingTags[] = {"</think>", "<|thought_end|>"};
-    for (const auto* tag : kClosingTags) {
-        std::string closingTag(tag);
-        size_t pos = 0;
-        while ((pos = text.find(closingTag, pos)) != std::string::npos) {
-            text.erase(pos, closingTag.size());
-        }
-    }
-}
-
-inline size_t trailingThinkCloserPrefixLength(const std::string& text) {
-    static const char* kClosingTags[] = {"</think>", "<|thought_end|>"};
-    size_t maxPrefix = 0;
-    for (const auto* tag : kClosingTags) {
-        std::string closingTag(tag);
-        size_t upper = std::min(text.size(), closingTag.size() - 1);
-        for (size_t len = 1; len <= upper; len++) {
-            if (text.compare(text.size() - len, len, closingTag, 0, len) == 0) {
-                maxPrefix = std::max(maxPrefix, len);
-            }
-        }
-    }
-    return maxPrefix;
-}
-
 inline bool stripLeadingEmptyThinkBlocks(std::string& text) {
     struct ThinkTagPair {
         const char* start;

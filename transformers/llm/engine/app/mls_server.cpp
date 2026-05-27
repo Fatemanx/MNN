@@ -5,6 +5,7 @@
 
 #include "mls_server.hpp"
 #include <iostream>
+#include "prompt_cache_utils.hpp"
 
 
 
@@ -45,10 +46,7 @@ std::string trimLeadingWhitespace(const std::string& str) {
 }
 
     const std::string getR1AssistantString(std::string assistant_content) {
-    std::size_t pos = assistant_content.find("</think>");
-    if (pos != std::string::npos) {
-        assistant_content.erase(0, pos + std::string("</think>").length());
-    }
+    MNN::Transformer::stripLeadingReasoningBlocks(assistant_content);
     return trimLeadingWhitespace(assistant_content) + "<|end_of_sentence|>";
 }
 
