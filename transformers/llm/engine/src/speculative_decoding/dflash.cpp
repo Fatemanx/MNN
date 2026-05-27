@@ -513,11 +513,14 @@ void DFlashGeneration::generate(GenerationParams& param) {
             int token = block_ids[i];
             mContext->history_tokens.push_back(token);
             mContext->output_tokens.push_back(token);
-            mLlm->emitDecodedToken(token);
             if (mLlm->is_stop(token)) {
+                if (nullptr != mContext->os) {
+                    *mContext->os << mContext->end_with << std::flush;
+                }
                 stop = true;
                 break;
             }
+            mLlm->emitDecodedToken(token);
         }
 
         if (!stop) {
