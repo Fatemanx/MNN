@@ -695,7 +695,10 @@ class ModelMapper:
             'config': self.default_config,
             'model': self.default_model,
             'decoder': self.default_decoder,
-            'attention': hunyuan_attention
+            'attention': hunyuan_attention,
+            'attention_options': {
+                'qk_norm_after_rope': True
+            }
         }
         self.regist('hunyuan_v1_dense', hunyuan_map)
 

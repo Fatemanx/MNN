@@ -76,6 +76,11 @@ class LlmConfig(PretrainedConfig):
         llm_config = cls(**llm_config_kwargs)
         # rename attribute for different models
         ModelMapper.do_map(llm_config, config, model_map['config'])
+        attention_options = model_map.get('attention_options', {})
+        llm_config.qk_norm_after_rope = bool(
+            getattr(config, 'qk_norm_after_rope', False)
+            or attention_options.get('qk_norm_after_rope', False)
+        )
 
         # Post-processing and setting defaults
         if llm_config.num_key_value_heads is None:

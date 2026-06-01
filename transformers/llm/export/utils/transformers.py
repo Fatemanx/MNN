@@ -74,10 +74,6 @@ class Attention(torch.nn.Module):
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         ModelMapper.do_map(self, attn, mapper['attention'])
         self.qk_norm_after_rope = getattr(config, 'qk_norm_after_rope', False)
-        if not self.qk_norm_after_rope:
-            self.qk_norm_after_rope = (
-                hasattr(attn, 'query_layernorm') and hasattr(attn, 'key_layernorm')
-            )
 
         # Read attention scaling from the original HF attention module
         if hasattr(attn, 'scaling'):
@@ -178,9 +174,9 @@ class Attention(torch.nn.Module):
         else:
             gate = None
 
-        qk_norm_after_rope = getattr(self, 'qk_norm_after_rope', getattr(self.config, 'qk_norm_after_rope', False))
+        qk_norm_after_rope = self.qk_norm_after_rope
         query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim)
-        # Most models apply q_norm before rotary, but HunYuan applies it after rotary.
+        # Most q/k norm models apply norm before rotary; HunYuan declares norm-after-rotary in its mapper.
         if not qk_norm_after_rope and hasattr(self, 'q_norm') and self.q_norm is not None:
             query_states = self.q_norm(query_states)
 
@@ -224,7 +220,8 @@ class Attention(torch.nn.Module):
         if qk_norm_after_rope:
             if hasattr(self, 'q_norm') and self.q_norm is not None:
                 query_states = self.q_norm(query_states)
-            if not use_shared_kv and self.k_proj is not None and hasattr(self, 'k_norm') and self.k_norm is not None:
+            if (not use_shared_kv and self.k_proj is not None
+                    and hasattr(self, 'k_norm') and self.k_norm is not None):
                 key_states = self.k_norm(key_states)
 
         # MobileLLM model llama4_text has qk_norm after rotary
